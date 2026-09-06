@@ -18,6 +18,8 @@
     --weekday-bg: #ffffff;
     --weekend-bg: #fdf3e9;
     --weekend-text: #b5722a;
+    --paid: #3a6ea5;
+    --paid-light: #e8f0f9;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { overflow-x: hidden; }
@@ -78,6 +80,7 @@
     color: var(--primary);
     margin-top: 2px;
   }
+  .total-card .value.unpaid-value { color: var(--accent); }
 
   .nav {
     display: flex;
@@ -120,6 +123,7 @@
   }
   .dow.weekend { color: var(--weekend-text); }
   .day-cell {
+    position: relative;
     min-height: 108px;
     border: 1px solid var(--border);
     border-radius: 10px;
@@ -129,11 +133,13 @@
     justify-content: flex-start;
     background: var(--weekday-bg);
     gap: 4px;
+    overflow: hidden;
   }
   .day-cell.empty { border: none; background: transparent; }
   .day-cell.today { border-color: var(--accent); border-width: 2px; }
   .day-cell.weekend { background: var(--weekend-bg); }
   .day-cell.weekend .day-num { color: var(--weekend-text); }
+  .day-cell.paid { background: var(--paid-light); border-color: var(--paid); }
   .day-top {
     display: flex;
     justify-content: space-between;
@@ -142,6 +148,21 @@
   .day-num { font-size: 0.78rem; font-weight: 600; color: var(--muted); }
   .day-cell.has-amount .day-num { color: var(--primary); }
   .day-sum { font-size: 0.75rem; font-weight: 700; color: var(--primary); }
+
+  .paid-stamp {
+    position: absolute;
+    top: 2px;
+    right: -18px;
+    background: var(--paid);
+    color: #fff;
+    font-size: 0.58rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    padding: 2px 22px;
+    transform: rotate(28deg);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+    pointer-events: none;
+  }
 
   .entries-list {
     display: flex;
@@ -159,6 +180,10 @@
     border-radius: 6px;
     padding: 2px 4px 2px 7px;
     font-weight: 600;
+  }
+  .day-cell.paid .entry-row {
+    background: #d9e6f2;
+    color: var(--paid);
   }
   .entry-row button {
     background: none;
@@ -190,6 +215,23 @@
   }
   .add-btn:active { background: var(--primary); color: #fff; }
   .add-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .paid-toggle-btn {
+    width: 100%;
+    margin-top: 4px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 4px 2px;
+    border-radius: 6px;
+    border: 1px solid var(--paid);
+    background: #fff;
+    color: var(--paid);
+    cursor: pointer;
+  }
+  .paid-toggle-btn.is-paid {
+    background: var(--paid);
+    color: #fff;
+  }
 
   .legend {
     margin-top: 16px;
@@ -300,6 +342,22 @@
       flex: 0 0 auto;
     }
 
+    .paid-toggle-btn {
+      order: 4;
+      width: auto;
+      flex: 0 0 auto;
+      min-height: 40px;
+      padding: 6px 10px;
+      margin-top: 0;
+    }
+
+    .paid-stamp {
+      top: -2px;
+      right: -22px;
+      font-size: 0.55rem;
+      padding: 1px 24px;
+    }
+
     .totals { position: static; }
     .total-card { padding: 10px 14px; }
   }
@@ -309,7 +367,7 @@
 <div class="wrap">
   <header>
     <h1>🧺 Chore Earnings Calendar</h1>
-    <p>Tap a price to add a chore. Do more than one? Tap again.</p>
+    <p>Tap a price to add a chore. Mark a day paid once you've paid her out.</p>
   </header>
 
   <div class="sync-status" id="syncStatus">Connecting…</div>
@@ -322,6 +380,10 @@
     <div class="total-card">
       <div class="label">This Month</div>
       <div class="value" id="monthTotal">$0.00</div>
+    </div>
+    <div class="total-card">
+      <div class="label">Unpaid (Month)</div>
+      <div class="value unpaid-value" id="unpaidTotal">$0.00</div>
     </div>
   </div>
 
@@ -343,6 +405,7 @@
   <div class="legend" style="margin-top:6px;">
     <span style="color:var(--muted);">🟫 Weekday</span>
     <span style="color:var(--weekend-text); font-weight:600;">🟧 Weekend</span>
+    <span style="color:var(--paid); font-weight:600;">🔵 Paid</span>
   </div>
 
   <div class="reset-row" id="resetRow">
@@ -354,7 +417,7 @@
     </div>
   </div>
 
-  <footer class="note">Synced live via Firebase — entries either of you adds show up on both phones within a second or two.<br>On phone: each day is a row — tap a price chip to add it, tap ✕ on a tag to remove it.</footer>
+  <footer class="note">Synced live via Firebase — entries either of you adds show up on both phones within a second or two.<br>Tap "Mark Paid" on a day once you've paid her out for it — it'll stamp the day and drop out of the unpaid total.</footer>
 </div>
 
 <script type="module">
@@ -384,10 +447,19 @@
   let viewMonth = today.getMonth();
   let currentMonthDays = {};
   let unsubscribe = null;
-  let pendingWrites = false;
 
   function monthKey(year, month) {
     return `${year}-${String(month + 1).padStart(2, "0")}`;
+  }
+
+  // Normalize a day's stored value into { amounts: [...], paid: bool },
+  // migrating older data that was just a plain array.
+  function normalizeDay(raw) {
+    if (Array.isArray(raw)) return { amounts: raw, paid: false };
+    if (raw && typeof raw === "object") {
+      return { amounts: Array.isArray(raw.amounts) ? raw.amounts : [], paid: !!raw.paid };
+    }
+    return { amounts: [], paid: false };
   }
 
   function setSyncStatus(state) {
@@ -413,9 +485,10 @@
 
   async function addEntry(dayKey, amount) {
     const docRef = doc(db, "chore-calendar", monthKey(viewYear, viewMonth));
-    const newArr = [...(currentMonthDays[dayKey] || []), amount];
+    const dayData = normalizeDay(currentMonthDays[dayKey]);
+    const newAmounts = [...dayData.amounts, amount];
     try {
-      await setDoc(docRef, { days: { [dayKey]: newArr } }, { merge: true });
+      await setDoc(docRef, { days: { [dayKey]: { amounts: newAmounts, paid: dayData.paid } } }, { merge: true });
     } catch (e) {
       console.error(e);
       setSyncStatus("err");
@@ -424,10 +497,22 @@
 
   async function removeEntry(dayKey, idx) {
     const docRef = doc(db, "chore-calendar", monthKey(viewYear, viewMonth));
-    const newArr = [...(currentMonthDays[dayKey] || [])];
-    newArr.splice(idx, 1);
+    const dayData = normalizeDay(currentMonthDays[dayKey]);
+    const newAmounts = [...dayData.amounts];
+    newAmounts.splice(idx, 1);
     try {
-      await setDoc(docRef, { days: { [dayKey]: newArr } }, { merge: true });
+      await setDoc(docRef, { days: { [dayKey]: { amounts: newAmounts, paid: dayData.paid } } }, { merge: true });
+    } catch (e) {
+      console.error(e);
+      setSyncStatus("err");
+    }
+  }
+
+  async function togglePaid(dayKey) {
+    const docRef = doc(db, "chore-calendar", monthKey(viewYear, viewMonth));
+    const dayData = normalizeDay(currentMonthDays[dayKey]);
+    try {
+      await setDoc(docRef, { days: { [dayKey]: { amounts: dayData.amounts, paid: !dayData.paid } } }, { merge: true });
     } catch (e) {
       console.error(e);
       setSyncStatus("err");
@@ -484,12 +569,15 @@
 
     let monthTotal = 0;
     let weekTotal = 0;
+    let unpaidTotal = 0;
     const [weekStart, weekEnd] = getWeekRangeForToday();
 
     for (let day = 1; day <= daysInMonth; day++) {
       const cellDate = new Date(viewYear, viewMonth, day);
       const dayKey = String(day);
-      const entries = currentMonthDays[dayKey] || [];
+      const dayData = normalizeDay(currentMonthDays[dayKey]);
+      const entries = dayData.amounts;
+      const isPaid = dayData.paid;
       const daySum = entries.reduce((s, v) => s + parseFloat(v), 0);
       const dowIdx = cellDate.getDay();
 
@@ -498,6 +586,14 @@
       if (dowIdx === 0 || dowIdx === 6) cell.classList.add("weekend");
       if (entries.length) cell.classList.add("has-amount");
       if (isSameDay(cellDate, today)) cell.classList.add("today");
+      if (isPaid && entries.length) cell.classList.add("paid");
+
+      if (isPaid && entries.length) {
+        const stamp = document.createElement("div");
+        stamp.className = "paid-stamp";
+        stamp.textContent = "PAID";
+        cell.appendChild(stamp);
+      }
 
       const top = document.createElement("div");
       top.className = "day-top";
@@ -543,9 +639,19 @@
       });
       cell.appendChild(addRow);
 
+      if (entries.length) {
+        const paidBtn = document.createElement("button");
+        paidBtn.className = "paid-toggle-btn" + (isPaid ? " is-paid" : "");
+        paidBtn.type = "button";
+        paidBtn.textContent = isPaid ? "✅ Paid" : "Mark Paid";
+        paidBtn.addEventListener("click", () => togglePaid(dayKey));
+        cell.appendChild(paidBtn);
+      }
+
       grid.appendChild(cell);
 
       monthTotal += daySum;
+      if (!isPaid) unpaidTotal += daySum;
       if (cellDate >= weekStart && cellDate <= weekEnd) {
         weekTotal += daySum;
       }
@@ -553,6 +659,7 @@
 
     document.getElementById("monthTotal").textContent = `$${monthTotal.toFixed(2)}`;
     document.getElementById("weekTotal").textContent = `$${weekTotal.toFixed(2)}`;
+    document.getElementById("unpaidTotal").textContent = `$${unpaidTotal.toFixed(2)}`;
 
     const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
     document.getElementById("monthLabel").textContent = `${monthNames[viewMonth]} ${viewYear}`;
